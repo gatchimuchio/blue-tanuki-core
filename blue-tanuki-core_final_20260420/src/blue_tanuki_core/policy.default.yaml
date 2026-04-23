@@ -1,0 +1,117 @@
+# blue-tanuki default runtime policy
+# This is the shipped safe-default policy used when no explicit policy_path is set.
+# Goal: keep the control plane usable while forcing review at real side-effect boundaries.
+
+version: 1
+defaults:
+  on_no_match: pass
+
+rules:
+  # ── inbound hygiene ───────────────────────────────────────────────
+  - id: clarify_on_empty_input
+    when:
+      direction: inbound
+      content_match: '^\s*$'
+    action: suspend_clarify
+    clarify_prompt: "入力が空です。依頼内容を具体的に書いてください。"
+
+  # ── file operations: stop obviously sensitive targets, approve mutating ops ──
+  - id: stop_sensitive_env_write
+    when:
+      direction: pre_module
+      module: file_ops
+      op: write
+      resource_match: '(^|/)(\.env(\..*)?|id_[^/]+|.*\.(pem|key|p12|pfx))$'
+    action: stop
+    reason: "sensitive credential-like file write is blocked"
+
+  - id: stop_sensitive_env_append
+    when:
+      direction: pre_module
+      module: file_ops
+      op: append
+      resource_match: '(^|/)(\.env(\..*)?|id_[^/]+|.*\.(pem|key|p12|pfx))$'
+    action: stop
+    reason: "sensitive credential-like file append is blocked"
+
+  - id: stop_git_metadata_write
+    when:
+      direction: pre_module
+      module: file_ops
+      op: write
+      resource_match: '(^|/)(\.git/|\.git$|\.gitignore$|\.gitattributes$|\.gitmodules$)'
+    action: stop
+    reason: "git metadata mutation is blocked by default"
+
+  - id: stop_git_metadata_delete
+    when:
+      direction: pre_module
+      module: file_ops
+      op: delete
+      resource_match: '(^|/)(\.git/|\.git$|\.gitignore$|\.gitattributes$|\.gitmodules$)'
+    action: stop
+    reason: "git metadata deletion is blocked by default"
+
+  - id: approve_file_write
+    when:
+      direction: pre_module
+      module: file_ops
+      op: write
+    action: suspend_approval
+    reason: "file write requires approval"
+
+  - id: approve_file_append
+    when:
+      direction: pre_module
+      module: file_ops
+      op: append
+    action: suspend_approval
+    reason: "file append requires approval"
+
+  - id: approve_file_delete
+    when:
+      direction: pre_module
+      module: file_ops
+      op: delete
+    action: suspend_approval
+    reason: "file delete requires approval"
+
+  # ── external network ──────────────────────────────────────────────
+  - id: approve_external_fetch
+    when:
+      direction: pre_module
+      module: web_fetch
+      op: get
+    action: suspend_approval
+    reason: "external network request requires approval"
+
+  # ── side-effect bounds ────────────────────────────────────────────
+  - id: stop_on_large_side_effect
+    when:
+      direction: post_module
+      side_effect_bytes_out_gt: 10485760
+    action: stop
+    reason: "side effect exceeds 10 MiB cap"
+
+  # ── LLM spend / blast-radius proxies ─────────────────────────────
+  - id: approve_large_llm_payload
+    when:
+      direction: pre_llm
+      payload_size_gt: 200000
+    action: suspend_approval
+    reason: "large LLM payload requires approval"
+
+  - id: approve_high_cost_model
+    when:
+      direction: pre_llm
+      model_match: '(?i)(opus|gpt-5-pro|o1-pro|ultra)'
+    action: suspend_approval
+    reason: "high-cost model requires approval"
+
+  # ── provider stops ───────────────────────────────────────────────
+  - id: stop_on_filtered_llm
+    when:
+      direction: post_llm
+      finish_reason: filtered
+    action: stop
+    reason: "llm provider filtered the response"
